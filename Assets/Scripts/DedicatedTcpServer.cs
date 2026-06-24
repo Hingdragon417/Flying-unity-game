@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Net;
 using System.Net.Sockets;
+using System.IO;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -13,9 +14,11 @@ public class DedicatedTcpServer : MonoBehaviour
     [SerializeField] private int port = 25661;
     [SerializeField] private bool startOnAwake = true;
 
-    private readonly List<TcpClient> clients = new();
+    private readonly List<ClientConnection> clients = new();
+    private readonly object clientsLock = new();
     private TcpListener listener;
     private CancellationTokenSource cancellation;
+    private int nextClientId = 1;
 
     public int Port => port;
     public bool IsRunning => listener != null;
@@ -47,10 +50,15 @@ public class DedicatedTcpServer : MonoBehaviour
         {
             while (!cancellation.IsCancellationRequested)
             {
-                TcpClient client = await listener.AcceptTcpClientAsync();
-                clients.Add(client);
+                TcpClient tcpClient = await listener.AcceptTcpClientAsync();
+                ClientConnection client = new(nextClientId++, tcpClient);
 
-                Debug.Log($"Client connected: {client.Client.RemoteEndPoint}");
+                lock (clientsLock)
+                {
+                    clients.Add(client);
+                }
+
+                Debug.Log($"Client {client.Id} connected: {tcpClient.Client.RemoteEndPoint}");
                 _ = HandleClientAsync(client, cancellation.Token);
             }
         }
@@ -75,76 +83,114 @@ public class DedicatedTcpServer : MonoBehaviour
         listener?.Stop();
         listener = null;
 
-        foreach (TcpClient client in clients)
+        List<ClientConnection> snapshot;
+
+        lock (clientsLock)
+        {
+            snapshot = new List<ClientConnection>(clients);
+            clients.Clear();
+        }
+
+        foreach (ClientConnection client in snapshot)
         {
             client.Close();
         }
-
-        clients.Clear();
     }
 
     public async Task BroadcastAsync(string message)
     {
-        byte[] data = Encoding.UTF8.GetBytes(message + "\n");
+        await BroadcastAsync(message, null);
+    }
 
-        for (int i = clients.Count - 1; i >= 0; i--)
+    private async Task BroadcastAsync(string message, ClientConnection excludedClient)
+    {
+        List<ClientConnection> snapshot;
+
+        lock (clientsLock)
         {
-            TcpClient client = clients[i];
+            snapshot = new List<ClientConnection>(clients);
+        }
 
-            if (!client.Connected)
+        foreach (ClientConnection client in snapshot)
+        {
+            if (client == excludedClient)
             {
-                clients.RemoveAt(i);
                 continue;
             }
 
             try
             {
-                await client.GetStream().WriteAsync(data, 0, data.Length);
+                await client.SendAsync(message);
             }
             catch
             {
-                client.Close();
-                clients.RemoveAt(i);
+                RemoveClient(client);
             }
         }
     }
 
-    private async Task HandleClientAsync(TcpClient client, CancellationToken token)
+    private async Task HandleClientAsync(ClientConnection client, CancellationToken token)
     {
-        byte[] buffer = new byte[4096];
-
         try
         {
-            using NetworkStream stream = client.GetStream();
+            await client.SendAsync($"welcome|{client.Id}");
+            await BroadcastAsync($"join|{client.Id}", client);
 
-            while (!token.IsCancellationRequested && client.Connected)
+            while (!token.IsCancellationRequested && client.IsConnected)
             {
-                int bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length);
+                string message = await client.Reader.ReadLineAsync();
 
-                if (bytesRead == 0)
+                if (message == null)
                 {
                     break;
                 }
 
-                string message = Encoding.UTF8.GetString(buffer, 0, bytesRead).Trim();
-                Debug.Log($"Client says: {message}");
-
-                byte[] reply = Encoding.UTF8.GetBytes($"Server received: {message}\n");
-                await stream.WriteAsync(reply, 0, reply.Length);
+                HandleClientMessage(client, message);
             }
         }
         catch (Exception exception)
         {
             if (!token.IsCancellationRequested)
             {
-                Debug.LogWarning($"Client disconnected with error: {exception.Message}");
+                Debug.LogWarning($"Client {client.Id} disconnected with error: {exception.Message}");
             }
         }
         finally
         {
-            clients.Remove(client);
-            client.Close();
-            Debug.Log("Client disconnected.");
+            RemoveClient(client);
+        }
+    }
+
+    private void HandleClientMessage(ClientConnection client, string message)
+    {
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            return;
+        }
+
+        string[] parts = message.Split('|');
+
+        if (parts.Length == 8 && parts[0] == "state")
+        {
+            _ = BroadcastAsync($"state|{client.Id}|{parts[1]}|{parts[2]}|{parts[3]}|{parts[4]}|{parts[5]}|{parts[6]}|{parts[7]}", client);
+        }
+    }
+
+    private void RemoveClient(ClientConnection client)
+    {
+        bool removed;
+
+        lock (clientsLock)
+        {
+            removed = clients.Remove(client);
+        }
+
+        client.Close();
+
+        if (removed)
+        {
+            _ = BroadcastAsync($"leave|{client.Id}", null);
+            Debug.Log($"Client {client.Id} disconnected.");
         }
     }
 
@@ -181,5 +227,40 @@ public class DedicatedTcpServer : MonoBehaviour
     private void OnDestroy()
     {
         StopServer();
+    }
+
+    private sealed class ClientConnection
+    {
+        private readonly TcpClient tcpClient;
+        private readonly StreamWriter writer;
+
+        public ClientConnection(int id, TcpClient tcpClient)
+        {
+            Id = id;
+            this.tcpClient = tcpClient;
+
+            NetworkStream stream = tcpClient.GetStream();
+            Reader = new StreamReader(stream, Encoding.UTF8);
+            writer = new StreamWriter(stream, Encoding.UTF8)
+            {
+                AutoFlush = true
+            };
+        }
+
+        public int Id { get; }
+        public StreamReader Reader { get; }
+        public bool IsConnected => tcpClient.Connected;
+
+        public Task SendAsync(string message)
+        {
+            return writer.WriteLineAsync(message);
+        }
+
+        public void Close()
+        {
+            Reader.Dispose();
+            writer.Dispose();
+            tcpClient.Close();
+        }
     }
 }

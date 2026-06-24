@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading;
@@ -18,10 +19,13 @@ public class DynamicTcpClient : MonoBehaviour
     private TcpClient client;
     private NetworkStream stream;
     private CancellationTokenSource cancellation;
+    private readonly ConcurrentQueue<string> receivedMessages = new();
+    private readonly StringBuilder receiveBuffer = new();
 
     public bool IsConnected => client != null && client.Connected;
     public string Host => host;
     public int Port => port;
+    public event Action<string> MessageReceived;
 
     private async void Start()
     {
@@ -79,6 +83,14 @@ public class DynamicTcpClient : MonoBehaviour
         }
     }
 
+    private void Update()
+    {
+        while (receivedMessages.TryDequeue(out string message))
+        {
+            MessageReceived?.Invoke(message);
+        }
+    }
+
     public void SetServer(string serverHost, int serverPort)
     {
         host = serverHost;
@@ -132,8 +144,7 @@ public class DynamicTcpClient : MonoBehaviour
                     return;
                 }
 
-                string message = Encoding.UTF8.GetString(buffer, 0, bytesRead);
-                Debug.Log($"TCP received: {message}");
+                EnqueueReceivedText(Encoding.UTF8.GetString(buffer, 0, bytesRead));
             }
             catch (Exception exception)
             {
@@ -144,6 +155,30 @@ public class DynamicTcpClient : MonoBehaviour
                 }
 
                 return;
+            }
+        }
+    }
+
+    private void EnqueueReceivedText(string text)
+    {
+        receiveBuffer.Append(text);
+
+        while (true)
+        {
+            string bufferedText = receiveBuffer.ToString();
+            int newlineIndex = bufferedText.IndexOf('\n');
+
+            if (newlineIndex < 0)
+            {
+                return;
+            }
+
+            string message = bufferedText[..newlineIndex].Trim();
+            receiveBuffer.Remove(0, newlineIndex + 1);
+
+            if (!string.IsNullOrWhiteSpace(message))
+            {
+                receivedMessages.Enqueue(message);
             }
         }
     }
@@ -164,7 +199,7 @@ public class DynamicTcpClient : MonoBehaviour
                 host = args[i + 1];
                 i++;
             }
-            else if (args[i] == "-serverPort" && i + 1 < args.Length && int.TryParse(args[i + 1], out int parsedPort))
+            else if ((args[i] == "-serverPort" || args[i] == "-port") && i + 1 < args.Length && int.TryParse(args[i + 1], out int parsedPort))
             {
                 port = parsedPort;
                 i++;
