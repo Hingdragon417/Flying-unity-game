@@ -154,12 +154,23 @@ public class DedicatedTcpServer : MonoBehaviour
 
         for (int i = 0; i < args.Length; i++)
         {
-            if (args[i] == "-serverPort" && i + 1 < args.Length && int.TryParse(args[i + 1], out int parsedPort))
+            if ((args[i] == "-port" || args[i] == "-serverPort") && i + 1 < args.Length)
             {
-                port = parsedPort;
+                TryApplyPortArgument(args[i], args[i + 1]);
                 i++;
             }
         }
+    }
+
+    private void TryApplyPortArgument(string argumentName, string argumentValue)
+    {
+        if (!ushort.TryParse(argumentValue, out ushort parsedPort) || parsedPort == 0)
+        {
+            Debug.LogWarning($"Ignoring invalid {argumentName} value: {argumentValue}");
+            return;
+        }
+
+        port = parsedPort;
     }
 
     private void OnApplicationQuit()
