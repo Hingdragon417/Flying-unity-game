@@ -138,6 +138,7 @@ public class DedicatedTcpServer : MonoBehaviour
         try
         {
             await client.SendAsync($"welcome|{client.Id}");
+            await SendListingsAsync(client);
             await BroadcastAsync($"join|{client.Id}", client);
 
             while (!token.IsCancellationRequested && client.IsConnected)
@@ -239,6 +240,7 @@ public class DedicatedTcpServer : MonoBehaviour
 
         _ = client.SendAsync(FormatListing("listing_created", listing));
         _ = BroadcastAsync(message, client);
+        _ = SendListingsAsync(client);
 
         Debug.Log($"Created server listing {listing.Id}: {listing.Name} ({maxPlayers} players).");
     }

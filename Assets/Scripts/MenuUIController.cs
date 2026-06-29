@@ -306,6 +306,12 @@ public class MenuUIController : MonoBehaviour
         {
             serverListings.Remove(listingId);
             RebuildServerRows();
+            return;
+        }
+
+        if (parts[0] != "join" && parts[0] != "leave" && parts[0] != "state")
+        {
+            Debug.LogWarning($"Unhandled TCP menu message: {message}");
         }
     }
 
