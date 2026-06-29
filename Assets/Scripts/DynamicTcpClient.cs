@@ -8,6 +8,8 @@ using UnityEngine;
 
 public class DynamicTcpClient : MonoBehaviour
 {
+    private static readonly UTF8Encoding Utf8NoBom = new(false);
+
     [Header("Default Server")]
     [SerializeField] private string host = "play.atomichost.xyz";
     [SerializeField] private int port = 25661;
@@ -19,6 +21,7 @@ public class DynamicTcpClient : MonoBehaviour
     private TcpClient client;
     private NetworkStream stream;
     private CancellationTokenSource cancellation;
+    private Task connectTask;
     private readonly ConcurrentQueue<string> receivedMessages = new();
     private readonly StringBuilder receiveBuffer = new();
 
@@ -55,6 +58,38 @@ public class DynamicTcpClient : MonoBehaviour
 
     public async Task ConnectAsync(string serverHost, int serverPort)
     {
+        if (IsConnected && host == serverHost && port == serverPort)
+        {
+            return;
+        }
+
+        if (connectTask != null && !connectTask.IsCompleted)
+        {
+            await connectTask;
+
+            if (IsConnected && host == serverHost && port == serverPort)
+            {
+                return;
+            }
+        }
+
+        connectTask = ConnectInternalAsync(serverHost, serverPort);
+
+        try
+        {
+            await connectTask;
+        }
+        finally
+        {
+            if (connectTask != null && connectTask.IsCompleted)
+            {
+                connectTask = null;
+            }
+        }
+    }
+
+    private async Task ConnectInternalAsync(string serverHost, int serverPort)
+    {
         Disconnect();
 
         host = serverHost;
@@ -68,13 +103,12 @@ public class DynamicTcpClient : MonoBehaviour
             stream = client.GetStream();
 
             Debug.Log($"Connected to TCP server {host}:{port}");
+            _ = ReceiveLoopAsync(cancellation.Token);
 
             if (!string.IsNullOrWhiteSpace(helloMessage))
             {
-                await SendAsync(helloMessage);
+                await WriteMessageAsync(helloMessage);
             }
-
-            _ = ReceiveLoopAsync(cancellation.Token);
         }
         catch (Exception exception)
         {
@@ -104,14 +138,58 @@ public class DynamicTcpClient : MonoBehaviour
 
     public async Task SendAsync(string message)
     {
+        if ((stream == null || !IsConnected) && connectTask != null && !connectTask.IsCompleted)
+        {
+            await connectTask;
+        }
+
         if (stream == null || !IsConnected)
         {
-            Debug.LogWarning("Cannot send TCP message because the client is not connected.");
+            Debug.LogWarning("TCP send skipped because the client is not connected.");
             return;
         }
 
-        byte[] data = Encoding.UTF8.GetBytes(message + "\n");
-        await stream.WriteAsync(data, 0, data.Length);
+        await WriteMessageAsync(message);
+    }
+
+    private async Task WriteMessageAsync(string message)
+    {
+        byte[] data = Utf8NoBom.GetBytes(message + "\n");
+        Task writeTask = stream.WriteAsync(data, 0, data.Length);
+        Task completedTask = await Task.WhenAny(writeTask, Task.Delay(2000));
+
+        if (completedTask != writeTask)
+        {
+            Debug.LogWarning($"TCP send timed out: {message.Split('|')[0]}");
+            return;
+        }
+
+        await writeTask;
+    }
+
+    public async Task CreateServerListingAsync(int maxPlayers)
+    {
+        await CreateServerListingAsync(maxPlayers, string.Empty);
+    }
+
+    public async Task CreateServerListingAsync(int maxPlayers, string lobbyName)
+    {
+        int clampedMaxPlayers = Mathf.Clamp(maxPlayers, 1, 12);
+        string sanitizedLobbyName = SanitizeMessagePart(lobbyName);
+
+        if (!IsConnected)
+        {
+            await ConnectAsync();
+        }
+
+        await SendAsync($"create_listing|{clampedMaxPlayers}|{sanitizedLobbyName}");
+    }
+
+    private static string SanitizeMessagePart(string value)
+    {
+        return string.IsNullOrWhiteSpace(value)
+            ? string.Empty
+            : value.Trim().Replace("|", " ").Replace("\r", " ").Replace("\n", " ");
     }
 
     public void Disconnect()
@@ -144,7 +222,7 @@ public class DynamicTcpClient : MonoBehaviour
                     return;
                 }
 
-                EnqueueReceivedText(Encoding.UTF8.GetString(buffer, 0, bytesRead));
+                EnqueueReceivedText(Utf8NoBom.GetString(buffer, 0, bytesRead));
             }
             catch (Exception exception)
             {

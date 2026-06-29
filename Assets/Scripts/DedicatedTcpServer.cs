@@ -10,6 +10,11 @@ using UnityEngine;
 
 public class DedicatedTcpServer : MonoBehaviour
 {
+    private static readonly UTF8Encoding Utf8NoBom = new(false);
+    private static readonly Dictionary<int, ServerListing> listingTable = new();
+    private static readonly object listingTableLock = new();
+    private static int nextListingId = 1;
+
     [Header("Server")]
     [SerializeField] private int port = 25661;
     [SerializeField] private bool startOnAwake = true;
@@ -58,7 +63,6 @@ public class DedicatedTcpServer : MonoBehaviour
                     clients.Add(client);
                 }
 
-                Debug.Log($"Client {client.Id} connected: {tcpClient.Client.RemoteEndPoint}");
                 _ = HandleClientAsync(client, cancellation.Token);
             }
         }
@@ -169,11 +173,102 @@ public class DedicatedTcpServer : MonoBehaviour
         }
 
         string[] parts = message.Split('|');
+        parts[0] = parts[0].Trim().Trim('\uFEFF');
 
         if (parts.Length == 8 && parts[0] == "state")
         {
             _ = BroadcastAsync($"state|{client.Id}|{parts[1]}|{parts[2]}|{parts[3]}|{parts[4]}|{parts[5]}|{parts[6]}|{parts[7]}", client);
+            return;
         }
+
+        if (parts[0] == "create_listing")
+        {
+            CreateListing(client, parts);
+            return;
+        }
+
+        if (parts[0] == "listings_request")
+        {
+            _ = SendListingsAsync(client);
+        }
+    }
+
+    private void CreateListing(ClientConnection client, string[] parts)
+    {
+        int maxPlayers = 8;
+        string lobbyName = $"Server {client.Id}";
+
+        if (parts.Length > 1 && int.TryParse(parts[1], out int requestedMaxPlayers))
+        {
+            maxPlayers = Mathf.Clamp(requestedMaxPlayers, 1, 12);
+        }
+
+        if (parts.Length > 2 && !string.IsNullOrWhiteSpace(parts[2]))
+        {
+            lobbyName = parts[2].Trim();
+        }
+
+        ServerListing listing;
+        List<int> removedListingIds = new();
+
+        lock (listingTableLock)
+        {
+            foreach (KeyValuePair<int, ServerListing> existing in listingTable)
+            {
+                if (existing.Value.HostClientId == client.Id ||
+                    string.Equals(existing.Value.Name, lobbyName, StringComparison.OrdinalIgnoreCase))
+                {
+                    removedListingIds.Add(existing.Key);
+                }
+            }
+
+            foreach (int listingId in removedListingIds)
+            {
+                listingTable.Remove(listingId);
+            }
+
+            listing = new ServerListing(nextListingId++, client.Id, maxPlayers, lobbyName);
+            listingTable[listing.Id] = listing;
+        }
+
+        string message = FormatListing("listing_added", listing);
+        foreach (int removedListingId in removedListingIds)
+        {
+            _ = BroadcastAsync($"listing_removed|{removedListingId}", null);
+        }
+
+        _ = client.SendAsync(FormatListing("listing_created", listing));
+        _ = BroadcastAsync(message, client);
+
+        Debug.Log($"Created server listing {listing.Id}: {listing.Name} ({maxPlayers} players).");
+    }
+
+    private async Task SendListingsAsync(ClientConnection client)
+    {
+        List<ServerListing> snapshot;
+
+        lock (listingTableLock)
+        {
+            snapshot = new List<ServerListing>(listingTable.Values);
+        }
+
+        snapshot.Sort((left, right) => left.Id.CompareTo(right.Id));
+
+        await client.SendAsync($"listings_begin|{snapshot.Count}");
+        Debug.Log($"Sent server listing snapshot: {snapshot.Count} active.");
+
+        foreach (ServerListing listing in snapshot)
+        {
+            string message = FormatListing("listing", listing);
+            await client.SendAsync(message);
+        }
+
+        await client.SendAsync("listings_end");
+    }
+
+    private static string FormatListing(string messageType, ServerListing listing)
+    {
+        return $"{messageType}|{listing.Id}|{listing.HostClientId}|{listing.MaxPlayers}|{listing.CurrentPlayers}|{listing.Name}";
     }
 
     private void RemoveClient(ClientConnection client)
@@ -190,7 +285,6 @@ public class DedicatedTcpServer : MonoBehaviour
         if (removed)
         {
             _ = BroadcastAsync($"leave|{client.Id}", null);
-            Debug.Log($"Client {client.Id} disconnected.");
         }
     }
 
@@ -240,8 +334,8 @@ public class DedicatedTcpServer : MonoBehaviour
             this.tcpClient = tcpClient;
 
             NetworkStream stream = tcpClient.GetStream();
-            Reader = new StreamReader(stream, Encoding.UTF8);
-            writer = new StreamWriter(stream, Encoding.UTF8)
+            Reader = new StreamReader(stream, Utf8NoBom);
+            writer = new StreamWriter(stream, Utf8NoBom)
             {
                 AutoFlush = true
             };
@@ -263,4 +357,22 @@ public class DedicatedTcpServer : MonoBehaviour
             tcpClient.Close();
         }
     }
+
+    private sealed class ServerListing
+    {
+        public ServerListing(int id, int hostClientId, int maxPlayers, string name)
+        {
+            Id = id;
+            HostClientId = hostClientId;
+            MaxPlayers = maxPlayers;
+            Name = name;
+        }
+
+        public int Id { get; }
+        public int HostClientId { get; }
+        public int MaxPlayers { get; }
+        public string Name { get; }
+        public int CurrentPlayers => 1;
+    }
+
 }
