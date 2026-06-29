@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using UnityEngine;
 
+// ATOMIC DEPLOY CHECK: lobby TCP client bundle 2026-06-29 protocol v2.
 public class DynamicTcpClient : MonoBehaviour
 {
     private static readonly UTF8Encoding Utf8NoBom = new(false);

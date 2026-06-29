@@ -4,6 +4,7 @@ using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
 
+// ATOMIC DEPLOY CHECK: lobby menu bundle 2026-06-29 protocol v2.
 public class MenuUIController : MonoBehaviour
 {
     [SerializeField] private GameObject findServerPanel;

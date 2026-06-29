@@ -8,7 +8,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using UnityEngine;
 
-// ATOMIC DEPLOY CHECK: lobby server script updated 2026-06-29 protocol v2.
+// ATOMIC DEPLOY CHECK: lobby server bundle 2026-06-29 protocol v2.
 public class DedicatedTcpServer : MonoBehaviour
 {
     private static readonly UTF8Encoding Utf8NoBom = new(false);
