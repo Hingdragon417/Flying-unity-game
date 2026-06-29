@@ -10,6 +10,7 @@ using UnityEngine;
 public class DynamicTcpClient : MonoBehaviour
 {
     private static readonly UTF8Encoding Utf8NoBom = new(false);
+    private static DynamicTcpClient activeClient;
 
     [Header("Default Server")]
     [SerializeField] private string host = "play.atomichost.xyz";
@@ -30,6 +31,18 @@ public class DynamicTcpClient : MonoBehaviour
     public string Host => host;
     public int Port => port;
     public event Action<string> MessageReceived;
+
+    private void Awake()
+    {
+        if (activeClient != null && activeClient != this)
+        {
+            Destroy(gameObject);
+            return;
+        }
+
+        activeClient = this;
+        DontDestroyOnLoad(gameObject);
+    }
 
     private async void Start()
     {
@@ -186,6 +199,16 @@ public class DynamicTcpClient : MonoBehaviour
         await SendAsync($"create_listing|{clampedMaxPlayers}|{sanitizedLobbyName}");
     }
 
+    public async Task JoinServerListingAsync(int listingId)
+    {
+        if (!IsConnected)
+        {
+            await ConnectAsync();
+        }
+
+        await SendAsync($"join_listing|{Mathf.Max(0, listingId)}");
+    }
+
     private static string SanitizeMessagePart(string value)
     {
         return string.IsNullOrWhiteSpace(value)
@@ -327,6 +350,11 @@ public class DynamicTcpClient : MonoBehaviour
 
     private void OnDestroy()
     {
+        if (activeClient == this)
+        {
+            activeClient = null;
+        }
+
         Disconnect();
     }
 }

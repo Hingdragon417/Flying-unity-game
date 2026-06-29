@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 using UnityEngine.UI;
 using TMPro;
 
@@ -15,6 +16,7 @@ public class MenuUIController : MonoBehaviour
     [SerializeField] private DynamicTcpClient tcpClient;
 
     private const int MaxAllowedPlayers = 12;
+    private const string MainGameSceneName = "MainGame";
 
     private Button createServerSubmitButton;
     private Slider maxPlayersSlider;
@@ -29,6 +31,7 @@ public class MenuUIController : MonoBehaviour
     private bool requestedInitialListings;
     private bool waitingForCreateResponse;
     private bool receivedServerProtocol;
+    private bool loadingGameScene;
     private int createServerPanelShownFrame = -1;
     private int createServerListingClickFrame = -1;
 
@@ -287,7 +290,29 @@ public class MenuUIController : MonoBehaviour
             return;
         }
 
-        if (parts[0] == "listing" || parts[0] == "listing_added" || parts[0] == "listing_created")
+        if (parts[0] == "listing_created" || parts[0] == "listing_joined")
+        {
+            waitingForCreateResponse = false;
+
+            if (TryParseListing(parts, out ServerListingInfo listing))
+            {
+                serverListings[listing.Id] = listing;
+                RebuildServerRows();
+                EnterLobby(listing);
+            }
+
+            return;
+        }
+
+        if (parts[0] == "join_failed")
+        {
+            string reason = parts.Length > 2 ? parts[2] : "unknown";
+            Debug.LogWarning($"Could not join lobby: {reason}.");
+            RequestServerListings();
+            return;
+        }
+
+        if (parts[0] == "listing" || parts[0] == "listing_added")
         {
             waitingForCreateResponse = false;
 
@@ -334,6 +359,40 @@ public class MenuUIController : MonoBehaviour
         {
             Debug.LogWarning($"Unhandled TCP menu message: {message}");
         }
+    }
+
+    private async void JoinLobby(ServerListingInfo listing)
+    {
+        if (listing.CurrentPlayers >= listing.MaxPlayers)
+        {
+            Debug.LogWarning($"Lobby '{listing.Name}' is full.");
+            return;
+        }
+
+        if (tcpClient == null)
+        {
+            tcpClient = FindOrCreateTcpClient();
+        }
+
+        if (tcpClient == null)
+        {
+            Debug.LogWarning("Cannot join lobby because no DynamicTcpClient was found.");
+            return;
+        }
+
+        await tcpClient.JoinServerListingAsync(listing.Id);
+    }
+
+    private void EnterLobby(ServerListingInfo listing)
+    {
+        if (loadingGameScene)
+        {
+            return;
+        }
+
+        loadingGameScene = true;
+        Debug.Log($"Joined lobby '{listing.Name}' ({listing.CurrentPlayers}/{listing.MaxPlayers}).");
+        SceneManager.LoadScene(MainGameSceneName);
     }
 
     private bool TryParseListing(string[] parts, out ServerListingInfo listing)
@@ -414,7 +473,16 @@ public class MenuUIController : MonoBehaviour
         TMP_Text joinText = joinButton != null ? joinButton.GetComponentInChildren<TMP_Text>(true) : FindTextUnder(row.transform, "JoinLobbyButton");
         if (joinText != null)
         {
-            joinText.text = $"{listing.CurrentPlayers}/{listing.MaxPlayers} Join";
+            joinText.text = listing.CurrentPlayers >= listing.MaxPlayers
+                ? $"{listing.CurrentPlayers}/{listing.MaxPlayers} Full"
+                : $"{listing.CurrentPlayers}/{listing.MaxPlayers} Join";
+        }
+
+        if (joinButton != null)
+        {
+            joinButton.onClick.RemoveAllListeners();
+            joinButton.interactable = listing.CurrentPlayers < listing.MaxPlayers;
+            joinButton.onClick.AddListener(() => JoinLobby(listing));
         }
     }
 

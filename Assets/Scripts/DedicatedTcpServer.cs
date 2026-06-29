@@ -191,7 +191,7 @@ public class DedicatedTcpServer : MonoBehaviour
 
         if (parts.Length == 8 && parts[0] == "state")
         {
-            _ = BroadcastAsync($"state|{client.Id}|{parts[1]}|{parts[2]}|{parts[3]}|{parts[4]}|{parts[5]}|{parts[6]}|{parts[7]}", client);
+            BroadcastStateToLobby(client, parts);
             return;
         }
 
@@ -201,10 +201,31 @@ public class DedicatedTcpServer : MonoBehaviour
             return;
         }
 
+        if (parts[0] == "join_listing")
+        {
+            JoinListing(client, parts);
+            return;
+        }
+
         if (parts[0] == "listings_request")
         {
             _ = SendListingsAsync(client);
         }
+    }
+
+    private void BroadcastStateToLobby(ClientConnection client, string[] parts)
+    {
+        int listingId = client.ListingId;
+
+        if (listingId <= 0)
+        {
+            return;
+        }
+
+        _ = BroadcastToListingAsync(
+            listingId,
+            $"state|{client.Id}|{parts[1]}|{parts[2]}|{parts[3]}|{parts[4]}|{parts[5]}|{parts[6]}|{parts[7]}",
+            client);
     }
 
     private void StartConsoleCommandLoop()
@@ -266,10 +287,13 @@ public class DedicatedTcpServer : MonoBehaviour
         }
 
         ServerListing listing;
+        ServerListing previousListing;
         List<int> removedListingIds = new();
 
         lock (listingTableLock)
         {
+            previousListing = RemoveClientFromCurrentListingLocked(client);
+
             foreach (KeyValuePair<int, ServerListing> existing in listingTable)
             {
                 if (existing.Value.HostClientId == client.Id ||
@@ -285,7 +309,14 @@ public class DedicatedTcpServer : MonoBehaviour
             }
 
             listing = new ServerListing(nextListingId++, client.Id, maxPlayers, lobbyName);
+            listing.AddMember(client.Id);
             listingTable[listing.Id] = listing;
+            client.ListingId = listing.Id;
+        }
+
+        if (previousListing != null && !removedListingIds.Contains(previousListing.Id))
+        {
+            _ = BroadcastAsync(FormatListing("listing_added", previousListing), null);
         }
 
         string message = FormatListing("listing_added", listing);
@@ -299,6 +330,60 @@ public class DedicatedTcpServer : MonoBehaviour
         _ = SendListingsAsync(client);
 
         Debug.Log($"Created server listing {listing.Id}: {listing.Name} ({maxPlayers} players).");
+    }
+
+    private void JoinListing(ClientConnection client, string[] parts)
+    {
+        if (parts.Length < 2 || !int.TryParse(parts[1], out int listingId))
+        {
+            _ = client.SendAsync("join_failed|0|invalid_listing");
+            return;
+        }
+
+        ServerListing listing = null;
+        ServerListing previousListing = null;
+        bool joined;
+        string failureReason = string.Empty;
+
+        lock (listingTableLock)
+        {
+            if (!listingTable.TryGetValue(listingId, out listing))
+            {
+                joined = false;
+                failureReason = "not_found";
+            }
+            else if (listing.CurrentPlayers >= listing.MaxPlayers && !listing.HasMember(client.Id))
+            {
+                joined = false;
+                failureReason = "full";
+            }
+            else
+            {
+                previousListing = RemoveClientFromCurrentListingLocked(client);
+                listing.AddMember(client.Id);
+                client.ListingId = listing.Id;
+                joined = true;
+            }
+        }
+
+        if (!joined)
+        {
+            _ = client.SendAsync($"join_failed|{listingId}|{failureReason}");
+            return;
+        }
+
+        string listingMessage = FormatListing("listing_added", listing);
+        if (previousListing != null && previousListing.Id != listing.Id)
+        {
+            _ = BroadcastAsync(FormatListing("listing_added", previousListing), null);
+            _ = BroadcastToListingAsync(previousListing.Id, $"leave|{client.Id}", null);
+        }
+
+        _ = client.SendAsync(FormatListing("listing_joined", listing));
+        _ = BroadcastAsync(listingMessage, null);
+        _ = BroadcastToListingAsync(listing.Id, $"player_joined|{client.Id}|{listing.Id}", client);
+
+        Debug.Log($"Client {client.Id} joined listing {listing.Id}: {listing.Name} ({listing.CurrentPlayers}/{listing.MaxPlayers}).");
     }
 
     private async Task SendListingsAsync(ClientConnection client)
@@ -329,21 +414,73 @@ public class DedicatedTcpServer : MonoBehaviour
         return $"{messageType}|{listing.Id}|{listing.HostClientId}|{listing.MaxPlayers}|{listing.CurrentPlayers}|{listing.Name}";
     }
 
+    private async Task BroadcastToListingAsync(int listingId, string message, ClientConnection excludedClient)
+    {
+        List<ClientConnection> snapshot;
+
+        lock (clientsLock)
+        {
+            snapshot = new List<ClientConnection>(clients);
+        }
+
+        foreach (ClientConnection client in snapshot)
+        {
+            if (client == excludedClient || client.ListingId != listingId)
+            {
+                continue;
+            }
+
+            try
+            {
+                await client.SendAsync(message);
+            }
+            catch
+            {
+                RemoveClient(client);
+            }
+        }
+    }
+
     private void RemoveClient(ClientConnection client)
     {
         bool removed;
+        ServerListing updatedListing = null;
+        int previousListingId = client.ListingId;
 
         lock (clientsLock)
         {
             removed = clients.Remove(client);
         }
 
+        lock (listingTableLock)
+        {
+            updatedListing = RemoveClientFromCurrentListingLocked(client);
+        }
+
         client.Close();
 
         if (removed)
         {
-            _ = BroadcastAsync($"leave|{client.Id}", null);
+            _ = BroadcastToListingAsync(previousListingId, $"leave|{client.Id}", null);
+
+            if (updatedListing != null)
+            {
+                _ = BroadcastAsync(FormatListing("listing_added", updatedListing), null);
+            }
         }
+    }
+
+    private ServerListing RemoveClientFromCurrentListingLocked(ClientConnection client)
+    {
+        if (client.ListingId <= 0 || !listingTable.TryGetValue(client.ListingId, out ServerListing listing))
+        {
+            client.ListingId = 0;
+            return null;
+        }
+
+        listing.RemoveMember(client.Id);
+        client.ListingId = 0;
+        return listing;
     }
 
     private void ApplyCommandLineOverrides()
@@ -400,6 +537,7 @@ public class DedicatedTcpServer : MonoBehaviour
         }
 
         public int Id { get; }
+        public int ListingId { get; set; }
         public StreamReader Reader { get; }
         public bool IsConnected => tcpClient.Connected;
 
@@ -418,6 +556,8 @@ public class DedicatedTcpServer : MonoBehaviour
 
     private sealed class ServerListing
     {
+        private readonly HashSet<int> memberClientIds = new();
+
         public ServerListing(int id, int hostClientId, int maxPlayers, string name)
         {
             Id = id;
@@ -430,7 +570,22 @@ public class DedicatedTcpServer : MonoBehaviour
         public int HostClientId { get; }
         public int MaxPlayers { get; }
         public string Name { get; }
-        public int CurrentPlayers => 1;
+        public int CurrentPlayers => memberClientIds.Count;
+
+        public bool HasMember(int clientId)
+        {
+            return memberClientIds.Contains(clientId);
+        }
+
+        public void AddMember(int clientId)
+        {
+            memberClientIds.Add(clientId);
+        }
+
+        public void RemoveMember(int clientId)
+        {
+            memberClientIds.Remove(clientId);
+        }
     }
 
 }
