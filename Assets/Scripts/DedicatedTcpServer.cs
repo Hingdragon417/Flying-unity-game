@@ -522,6 +522,7 @@ public class DedicatedTcpServer : MonoBehaviour
     {
         private readonly TcpClient tcpClient;
         private readonly StreamWriter writer;
+        private readonly SemaphoreSlim sendLock = new(1, 1);
 
         public ClientConnection(int id, TcpClient tcpClient)
         {
@@ -541,15 +542,25 @@ public class DedicatedTcpServer : MonoBehaviour
         public StreamReader Reader { get; }
         public bool IsConnected => tcpClient.Connected;
 
-        public Task SendAsync(string message)
+        public async Task SendAsync(string message)
         {
-            return writer.WriteLineAsync(message);
+            await sendLock.WaitAsync();
+
+            try
+            {
+                await writer.WriteLineAsync(message);
+            }
+            finally
+            {
+                sendLock.Release();
+            }
         }
 
         public void Close()
         {
             Reader.Dispose();
             writer.Dispose();
+            sendLock.Dispose();
             tcpClient.Close();
         }
     }
