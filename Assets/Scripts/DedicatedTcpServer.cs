@@ -138,6 +138,7 @@ public class DedicatedTcpServer : MonoBehaviour
         try
         {
             await client.SendAsync($"welcome|{client.Id}");
+            await client.SendAsync("server_protocol|2");
             await SendListingsAsync(client);
             await BroadcastAsync($"join|{client.Id}", client);
 

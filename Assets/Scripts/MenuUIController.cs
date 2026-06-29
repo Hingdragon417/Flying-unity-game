@@ -27,6 +27,7 @@ public class MenuUIController : MonoBehaviour
     private bool receivingListingSnapshot;
     private bool requestedInitialListings;
     private bool waitingForCreateResponse;
+    private bool receivedServerProtocol;
     private int createServerPanelShownFrame = -1;
     private int createServerListingClickFrame = -1;
 
@@ -208,8 +209,20 @@ public class MenuUIController : MonoBehaviour
 
         if (waitingForCreateResponse)
         {
-            Debug.LogWarning("No server listing response received. Make sure the dedicated server is running the latest build.");
+            Debug.LogWarning(receivedServerProtocol
+                ? "No server listing response received."
+                : "The connected dedicated server is not running the latest lobby-listing build.");
             waitingForCreateResponse = false;
+        }
+    }
+
+    private async Task CheckServerProtocolAsync()
+    {
+        await Task.Delay(2000);
+
+        if (!receivedServerProtocol)
+        {
+            Debug.LogWarning("Connected server did not report lobby protocol v2. Rebuild and redeploy the dedicated server binary.");
         }
     }
 
@@ -256,6 +269,13 @@ public class MenuUIController : MonoBehaviour
         {
             requestedInitialListings = true;
             RequestServerListings();
+            _ = CheckServerProtocolAsync();
+            return;
+        }
+
+        if (parts[0] == "server_protocol")
+        {
+            receivedServerProtocol = parts.Length > 1 && parts[1] == "2";
             return;
         }
 
