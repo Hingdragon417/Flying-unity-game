@@ -19,12 +19,14 @@ public class DedicatedTcpServer : MonoBehaviour
     [Header("Server")]
     [SerializeField] private int port = 25661;
     [SerializeField] private bool startOnAwake = true;
+    [SerializeField] private bool enableConsoleCommands = true;
 
     private readonly List<ClientConnection> clients = new();
     private readonly object clientsLock = new();
     private TcpListener listener;
     private CancellationTokenSource cancellation;
     private int nextClientId = 1;
+    private int shutdownRequested;
 
     public int Port => port;
     public bool IsRunning => listener != null;
@@ -32,10 +34,19 @@ public class DedicatedTcpServer : MonoBehaviour
     private async void Awake()
     {
         ApplyCommandLineOverrides();
+        StartConsoleCommandLoop();
 
         if (startOnAwake)
         {
             await StartServerAsync();
+        }
+    }
+
+    private void Update()
+    {
+        if (Interlocked.Exchange(ref shutdownRequested, 0) == 1)
+        {
+            ShutdownFromConsole();
         }
     }
 
@@ -194,6 +205,49 @@ public class DedicatedTcpServer : MonoBehaviour
         {
             _ = SendListingsAsync(client);
         }
+    }
+
+    private void StartConsoleCommandLoop()
+    {
+        if (!enableConsoleCommands || !Application.isBatchMode)
+        {
+            return;
+        }
+
+        _ = Task.Run(ReadConsoleCommands);
+    }
+
+    private void ReadConsoleCommands()
+    {
+        try
+        {
+            while (true)
+            {
+                string command = Console.ReadLine();
+
+                if (command == null)
+                {
+                    return;
+                }
+
+                if (string.Equals(command.Trim(), "stop", StringComparison.OrdinalIgnoreCase))
+                {
+                    Interlocked.Exchange(ref shutdownRequested, 1);
+                    return;
+                }
+            }
+        }
+        catch (Exception exception)
+        {
+            Debug.LogWarning($"Console command listener stopped: {exception.Message}");
+        }
+    }
+
+    private void ShutdownFromConsole()
+    {
+        Debug.Log("Stop command received. Shutting down dedicated server.");
+        StopServer();
+        Application.Quit(0);
     }
 
     private void CreateListing(ClientConnection client, string[] parts)
