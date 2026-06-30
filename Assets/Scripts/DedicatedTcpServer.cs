@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
 using System.IO;
@@ -20,6 +21,13 @@ public class DedicatedTcpServer : MonoBehaviour
     [SerializeField] private int port = 25661;
     [SerializeField] private bool startOnAwake = true;
     [SerializeField] private bool enableConsoleCommands = true;
+
+    [Header("Authoritative State Limits")]
+    [SerializeField] private float maxHorizontalSpeed = 85f;
+    [SerializeField] private float maxUpwardSpeed = 110f;
+    [SerializeField] private float maxDownwardSpeed = 140f;
+    [SerializeField] private float maxSingleUpdateDistance = 60f;
+    [SerializeField] private float serverPositionPadding = 2f;
 
     private readonly List<ClientConnection> clients = new();
     private readonly object clientsLock = new();
@@ -222,10 +230,135 @@ public class DedicatedTcpServer : MonoBehaviour
             return;
         }
 
+        if (!TryParseState(parts, out Vector3 requestedPosition, out Quaternion requestedRotation))
+        {
+            return;
+        }
+
+        AuthoritativePlayerState state = SanitizeClientState(client, requestedPosition, requestedRotation);
+
         _ = BroadcastToListingAsync(
             listingId,
-            $"state|{client.Id}|{parts[1]}|{parts[2]}|{parts[3]}|{parts[4]}|{parts[5]}|{parts[6]}|{parts[7]}",
+            FormatStateMessage(client.Id, state.Position, state.Rotation),
             client);
+    }
+
+    private bool TryParseState(string[] parts, out Vector3 position, out Quaternion rotation)
+    {
+        position = Vector3.zero;
+        rotation = Quaternion.identity;
+
+        if (!TryParseFloat(parts[1], out float x) ||
+            !TryParseFloat(parts[2], out float y) ||
+            !TryParseFloat(parts[3], out float z) ||
+            !TryParseFloat(parts[4], out float qx) ||
+            !TryParseFloat(parts[5], out float qy) ||
+            !TryParseFloat(parts[6], out float qz) ||
+            !TryParseFloat(parts[7], out float qw))
+        {
+            return false;
+        }
+
+        position = new Vector3(x, y, z);
+        rotation = new Quaternion(qx, qy, qz, qw);
+        return IsFinite(position) && IsFinite(rotation);
+    }
+
+    private AuthoritativePlayerState SanitizeClientState(ClientConnection client, Vector3 requestedPosition, Quaternion requestedRotation)
+    {
+        double now = NowSeconds();
+        Quaternion safeRotation = NormalizeRotation(requestedRotation);
+
+        if (!client.HasAuthoritativeState)
+        {
+            client.HasAuthoritativeState = true;
+            client.AuthoritativePosition = requestedPosition;
+            client.AuthoritativeRotation = safeRotation;
+            client.LastStateTime = now;
+            return new AuthoritativePlayerState(requestedPosition, safeRotation);
+        }
+
+        double deltaTime = Math.Max(0.001d, now - client.LastStateTime);
+        Vector3 previousPosition = client.AuthoritativePosition;
+        Vector3 delta = requestedPosition - previousPosition;
+
+        Vector3 horizontalDelta = new(delta.x, 0f, delta.z);
+        float maxHorizontalDistance = maxHorizontalSpeed * (float)deltaTime + serverPositionPadding;
+        if (horizontalDelta.magnitude > maxHorizontalDistance)
+        {
+            horizontalDelta = horizontalDelta.normalized * maxHorizontalDistance;
+        }
+
+        float maxVerticalDistance = (delta.y >= 0f ? maxUpwardSpeed : maxDownwardSpeed) * (float)deltaTime + serverPositionPadding;
+        float verticalDelta = Mathf.Clamp(delta.y, -maxVerticalDistance, maxVerticalDistance);
+
+        Vector3 sanitizedPosition = previousPosition + new Vector3(horizontalDelta.x, verticalDelta, horizontalDelta.z);
+        Vector3 updateDelta = sanitizedPosition - previousPosition;
+
+        if (updateDelta.magnitude > maxSingleUpdateDistance)
+        {
+            sanitizedPosition = previousPosition + updateDelta.normalized * maxSingleUpdateDistance;
+        }
+
+        client.AuthoritativePosition = sanitizedPosition;
+        client.AuthoritativeRotation = safeRotation;
+        client.LastStateTime = now;
+        return new AuthoritativePlayerState(sanitizedPosition, safeRotation);
+    }
+
+    private static string FormatStateMessage(int clientId, Vector3 position, Quaternion rotation)
+    {
+        return string.Join("|",
+            "state",
+            clientId.ToString(CultureInfo.InvariantCulture),
+            Format(position.x),
+            Format(position.y),
+            Format(position.z),
+            Format(rotation.x),
+            Format(rotation.y),
+            Format(rotation.z),
+            Format(rotation.w));
+    }
+
+    private static Quaternion NormalizeRotation(Quaternion rotation)
+    {
+        float magnitude = Mathf.Sqrt(rotation.x * rotation.x + rotation.y * rotation.y + rotation.z * rotation.z + rotation.w * rotation.w);
+        if (magnitude <= 0.0001f)
+        {
+            return Quaternion.identity;
+        }
+
+        return new Quaternion(rotation.x / magnitude, rotation.y / magnitude, rotation.z / magnitude, rotation.w / magnitude);
+    }
+
+    private static bool TryParseFloat(string value, out float parsedValue)
+    {
+        return float.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out parsedValue);
+    }
+
+    private static string Format(float value)
+    {
+        return value.ToString("R", CultureInfo.InvariantCulture);
+    }
+
+    private static bool IsFinite(Vector3 value)
+    {
+        return IsFinite(value.x) && IsFinite(value.y) && IsFinite(value.z);
+    }
+
+    private static bool IsFinite(Quaternion value)
+    {
+        return IsFinite(value.x) && IsFinite(value.y) && IsFinite(value.z) && IsFinite(value.w);
+    }
+
+    private static bool IsFinite(float value)
+    {
+        return !float.IsNaN(value) && !float.IsInfinity(value);
+    }
+
+    private static double NowSeconds()
+    {
+        return DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000d;
     }
 
     private void StartConsoleCommandLoop()
@@ -541,6 +674,10 @@ public class DedicatedTcpServer : MonoBehaviour
         public int ListingId { get; set; }
         public StreamReader Reader { get; }
         public bool IsConnected => tcpClient.Connected;
+        public bool HasAuthoritativeState { get; set; }
+        public Vector3 AuthoritativePosition { get; set; }
+        public Quaternion AuthoritativeRotation { get; set; } = Quaternion.identity;
+        public double LastStateTime { get; set; }
 
         public async Task SendAsync(string message)
         {
@@ -597,6 +734,18 @@ public class DedicatedTcpServer : MonoBehaviour
         {
             memberClientIds.Remove(clientId);
         }
+    }
+
+    private readonly struct AuthoritativePlayerState
+    {
+        public AuthoritativePlayerState(Vector3 position, Quaternion rotation)
+        {
+            Position = position;
+            Rotation = rotation;
+        }
+
+        public Vector3 Position { get; }
+        public Quaternion Rotation { get; }
     }
 
 }
