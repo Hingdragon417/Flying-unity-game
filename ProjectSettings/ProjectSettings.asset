@@ -536,6 +536,9 @@ PlayerSettings:
   - m_BuildTarget: AndroidPlayer
     m_APIs: 150000000b000000
     m_Automatic: 0
+  - m_BuildTarget: LinuxStandaloneSupport
+    m_APIs: 15000000
+    m_Automatic: 0
   m_BuildTargetVRSettings: []
   m_DefaultShaderChunkSizeInMB: 16
   m_DefaultShaderChunkCount: 0
@@ -550,7 +553,22 @@ PlayerSettings:
   m_BuildTargetGroupLightmapEncodingQuality:
   - serializedVersion: 2
     m_BuildTarget: Android
-    m_EncodingQuality: 1
+    m_EncodingQuality: 2
+  - serializedVersion: 2
+    m_BuildTarget: Standalone
+    m_EncodingQuality: 2
+  - serializedVersion: 2
+    m_BuildTarget: iOS
+    m_EncodingQuality: 2
+  - serializedVersion: 2
+    m_BuildTarget: Switch
+    m_EncodingQuality: 2
+  - serializedVersion: 2
+    m_BuildTarget: Switch2
+    m_EncodingQuality: 2
+  - serializedVersion: 2
+    m_BuildTarget: WindowsStoreApps
+    m_EncodingQuality: 2
   m_BuildTargetGroupHDRCubemapEncodingQuality: []
   m_BuildTargetGroupLightmapSettings: []
   m_BuildTargetGroupLoadStoreDebugModeSettings: []
@@ -826,7 +844,8 @@ PlayerSettings:
   webGLCloseOnQuit: 0
   webWasm2023: 0
   webEnableSubmoduleStrippingCompatibility: 0
-  scriptingDefineSymbols: {}
+  scriptingDefineSymbols:
+    Standalone: SENTIS_ANALYTICS_ENABLED;APP_UI_EDITOR_ONLY
   additionalCompilerArguments: {}
   platformArchitecture: {}
   scriptingBackend:
