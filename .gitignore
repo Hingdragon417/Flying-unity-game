@@ -6,8 +6,13 @@
 [Bb]uilds/
 ClientBuild/
 ServerBuild/
+LocalBuilds/
 [Ll]ogs/
 [Uu]ser[Ss]ettings/
+dedicated-build.log
+
+# Local duplicate/manual build output. The root glideServer build is tracked.
+Flying-unity-game/
 
 # Unity generated files
 *.csproj
