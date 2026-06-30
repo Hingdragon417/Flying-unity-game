@@ -193,27 +193,20 @@ public class DedicatedTcpServer : MonoBehaviour
         string[] parts = message.Split('|');
         parts[0] = parts[0].Trim().Trim('\uFEFF');
 
-        if (parts.Length == 8 && parts[0] == "state")
+        switch (parts[0])
         {
-            BroadcastStateToLobby(client, parts);
-            return;
-        }
-
-        if (parts[0] == "create_listing")
-        {
-            CreateListing(client, parts);
-            return;
-        }
-
-        if (parts[0] == "join_listing")
-        {
-            JoinListing(client, parts);
-            return;
-        }
-
-        if (parts[0] == "listings_request")
-        {
-            _ = SendListingsAsync(client);
+            case "state":
+                BroadcastStateToLobby(client, parts);
+                break;
+            case "create_listing":
+                CreateListing(client, parts);
+                break;
+            case "join_listing":
+                JoinListing(client, parts);
+                break;
+            case "listings_request":
+                _ = SendListingsAsync(client);
+                break;
         }
     }
 
@@ -221,12 +214,7 @@ public class DedicatedTcpServer : MonoBehaviour
     {
         int listingId = client.ListingId;
 
-        if (listingId <= 0)
-        {
-            return;
-        }
-
-        if (!TryParseState(parts, out Vector3 requestedPosition, out Quaternion requestedRotation))
+        if (listingId <= 0 || !TryParseState(parts, out Vector3 requestedPosition, out Quaternion requestedRotation))
         {
             return;
         }
@@ -244,19 +232,13 @@ public class DedicatedTcpServer : MonoBehaviour
         position = Vector3.zero;
         rotation = Quaternion.identity;
 
-        if (!TryParseFloat(parts[1], out float x) ||
-            !TryParseFloat(parts[2], out float y) ||
-            !TryParseFloat(parts[3], out float z) ||
-            !TryParseFloat(parts[4], out float qx) ||
-            !TryParseFloat(parts[5], out float qy) ||
-            !TryParseFloat(parts[6], out float qz) ||
-            !TryParseFloat(parts[7], out float qw))
+        if (parts.Length != 8 || !TryParseFloatRange(parts, 1, out float[] values))
         {
             return false;
         }
 
-        position = new Vector3(x, y, z);
-        rotation = new Quaternion(qx, qy, qz, qw);
+        position = new Vector3(values[0], values[1], values[2]);
+        rotation = new Quaternion(values[3], values[4], values[5], values[6]);
         return IsFinite(position) && IsFinite(rotation);
     }
 
@@ -265,44 +247,74 @@ public class DedicatedTcpServer : MonoBehaviour
         double now = NowSeconds();
         Quaternion safeRotation = NormalizeRotation(requestedRotation);
 
-        if (!client.HasAuthoritativeState)
-        {
-            client.HasAuthoritativeState = true;
-            client.AuthoritativePosition = requestedPosition;
-            client.AuthoritativeRotation = safeRotation;
-            client.LastStateTime = now;
-            return new AuthoritativePlayerState(requestedPosition, safeRotation);
-        }
+        return client.HasAuthoritativeState
+            ? SanitizeExistingState(client, requestedPosition, safeRotation, now)
+            : InitializeAuthoritativeState(client, requestedPosition, safeRotation, now);
+    }
 
+    private AuthoritativePlayerState InitializeAuthoritativeState(
+        ClientConnection client,
+        Vector3 requestedPosition,
+        Quaternion safeRotation,
+        double now)
+    {
+        client.HasAuthoritativeState = true;
+        client.AuthoritativePosition = requestedPosition;
+        client.AuthoritativeRotation = safeRotation;
+        client.LastStateTime = now;
+        return new AuthoritativePlayerState(requestedPosition, safeRotation);
+    }
+
+    private AuthoritativePlayerState SanitizeExistingState(
+        ClientConnection client,
+        Vector3 requestedPosition,
+        Quaternion safeRotation,
+        double now)
+    {
         double deltaTime = Math.Max(0.001d, now - client.LastStateTime);
         Vector3 previousPosition = client.AuthoritativePosition;
-        Vector3 delta = requestedPosition - previousPosition;
-
-        Vector3 horizontalDelta = new(delta.x, 0f, delta.z);
-        float maxHorizontalSpeed = GameplayRules.MaxOfficialHorizontalSpeed * ServerSpeedGraceMultiplier;
-        float maxHorizontalDistance = maxHorizontalSpeed * (float)deltaTime + GameplayRules.ServerPositionPadding;
-        if (horizontalDelta.magnitude > maxHorizontalDistance)
-        {
-            horizontalDelta = horizontalDelta.normalized * maxHorizontalDistance;
-        }
-
-        float maxUpwardSpeed = GameplayRules.MaxOfficialUpwardSpeed * ServerSpeedGraceMultiplier;
-        float maxVerticalSpeed = delta.y >= 0f ? maxUpwardSpeed : MaxServerFallSpeed;
-        float maxVerticalDistance = maxVerticalSpeed * (float)deltaTime + GameplayRules.ServerPositionPadding;
-        float verticalDelta = Mathf.Clamp(delta.y, -maxVerticalDistance, maxVerticalDistance);
-
-        Vector3 sanitizedPosition = previousPosition + new Vector3(horizontalDelta.x, verticalDelta, horizontalDelta.z);
-        Vector3 updateDelta = sanitizedPosition - previousPosition;
-
-        if (updateDelta.magnitude > GameplayRules.ServerMaxSingleUpdateDistance)
-        {
-            sanitizedPosition = previousPosition + updateDelta.normalized * GameplayRules.ServerMaxSingleUpdateDistance;
-        }
+        Vector3 sanitizedDelta = ClampAuthoritativeDelta(requestedPosition - previousPosition, (float)deltaTime);
+        Vector3 sanitizedPosition = previousPosition + sanitizedDelta;
 
         client.AuthoritativePosition = sanitizedPosition;
         client.AuthoritativeRotation = safeRotation;
         client.LastStateTime = now;
         return new AuthoritativePlayerState(sanitizedPosition, safeRotation);
+    }
+
+    private static Vector3 ClampAuthoritativeDelta(Vector3 delta, float deltaTime)
+    {
+        Vector3 horizontalDelta = new(delta.x, 0f, delta.z);
+        Vector3 clampedHorizontal = ClampMagnitude(horizontalDelta, MaxHorizontalDistance(deltaTime));
+        float clampedVertical = Mathf.Clamp(delta.y, -MaxDownwardDistance(deltaTime), MaxUpwardDistance(deltaTime));
+
+        return ClampMagnitude(
+            new Vector3(clampedHorizontal.x, clampedVertical, clampedHorizontal.z),
+            GameplayRules.ServerMaxSingleUpdateDistance);
+    }
+
+    private static float MaxHorizontalDistance(float deltaTime)
+    {
+        return GameplayRules.MaxOfficialHorizontalSpeed * ServerSpeedGraceMultiplier * deltaTime +
+            GameplayRules.ServerPositionPadding;
+    }
+
+    private static float MaxUpwardDistance(float deltaTime)
+    {
+        return GameplayRules.MaxOfficialUpwardSpeed * ServerSpeedGraceMultiplier * deltaTime +
+            GameplayRules.ServerPositionPadding;
+    }
+
+    private static float MaxDownwardDistance(float deltaTime)
+    {
+        return MaxServerFallSpeed * deltaTime + GameplayRules.ServerPositionPadding;
+    }
+
+    private static Vector3 ClampMagnitude(Vector3 value, float maxMagnitude)
+    {
+        return value.sqrMagnitude <= maxMagnitude * maxMagnitude
+            ? value
+            : value.normalized * maxMagnitude;
     }
 
     private static string FormatStateMessage(int clientId, Vector3 position, Quaternion rotation)
@@ -333,6 +345,21 @@ public class DedicatedTcpServer : MonoBehaviour
     private static bool TryParseFloat(string value, out float parsedValue)
     {
         return float.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out parsedValue);
+    }
+
+    private static bool TryParseFloatRange(string[] parts, int startIndex, out float[] values)
+    {
+        values = new float[parts.Length - startIndex];
+
+        for (int i = startIndex; i < parts.Length; i++)
+        {
+            if (!TryParseFloat(parts[i], out values[i - startIndex]))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static string Format(float value)
