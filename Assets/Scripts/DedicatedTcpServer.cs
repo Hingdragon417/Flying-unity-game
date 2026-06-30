@@ -22,12 +22,8 @@ public class DedicatedTcpServer : MonoBehaviour
     [SerializeField] private bool startOnAwake = true;
     [SerializeField] private bool enableConsoleCommands = true;
 
-    [Header("Authoritative State Limits")]
-    [SerializeField] private float maxHorizontalSpeed = 85f;
-    [SerializeField] private float maxUpwardSpeed = 110f;
-    [SerializeField] private float maxDownwardSpeed = 140f;
-    [SerializeField] private float maxSingleUpdateDistance = 60f;
-    [SerializeField] private float serverPositionPadding = 2f;
+    private const float ServerSpeedGraceMultiplier = 1.15f;
+    private const float MaxServerFallSpeed = 140f;
 
     private readonly List<ClientConnection> clients = new();
     private readonly object clientsLock = new();
@@ -283,21 +279,24 @@ public class DedicatedTcpServer : MonoBehaviour
         Vector3 delta = requestedPosition - previousPosition;
 
         Vector3 horizontalDelta = new(delta.x, 0f, delta.z);
-        float maxHorizontalDistance = maxHorizontalSpeed * (float)deltaTime + serverPositionPadding;
+        float maxHorizontalSpeed = GameplayRules.MaxOfficialHorizontalSpeed * ServerSpeedGraceMultiplier;
+        float maxHorizontalDistance = maxHorizontalSpeed * (float)deltaTime + GameplayRules.ServerPositionPadding;
         if (horizontalDelta.magnitude > maxHorizontalDistance)
         {
             horizontalDelta = horizontalDelta.normalized * maxHorizontalDistance;
         }
 
-        float maxVerticalDistance = (delta.y >= 0f ? maxUpwardSpeed : maxDownwardSpeed) * (float)deltaTime + serverPositionPadding;
+        float maxUpwardSpeed = GameplayRules.MaxOfficialUpwardSpeed * ServerSpeedGraceMultiplier;
+        float maxVerticalSpeed = delta.y >= 0f ? maxUpwardSpeed : MaxServerFallSpeed;
+        float maxVerticalDistance = maxVerticalSpeed * (float)deltaTime + GameplayRules.ServerPositionPadding;
         float verticalDelta = Mathf.Clamp(delta.y, -maxVerticalDistance, maxVerticalDistance);
 
         Vector3 sanitizedPosition = previousPosition + new Vector3(horizontalDelta.x, verticalDelta, horizontalDelta.z);
         Vector3 updateDelta = sanitizedPosition - previousPosition;
 
-        if (updateDelta.magnitude > maxSingleUpdateDistance)
+        if (updateDelta.magnitude > GameplayRules.ServerMaxSingleUpdateDistance)
         {
-            sanitizedPosition = previousPosition + updateDelta.normalized * maxSingleUpdateDistance;
+            sanitizedPosition = previousPosition + updateDelta.normalized * GameplayRules.ServerMaxSingleUpdateDistance;
         }
 
         client.AuthoritativePosition = sanitizedPosition;

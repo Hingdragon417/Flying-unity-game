@@ -7,36 +7,14 @@ using UnityEngine.InputSystem;
 public class PlayerMovement : MonoBehaviour
 {
     [Header("Movement")]
-    public float speed = 5f;
-    public float forwardSpeedMultiplier = 4f;
-    public float jumpForce = 5f;
     public float mouseSensitivity = 0.5f;
     public Transform playerCamera;
-
-    [Header("Glide (Minecraft-elytra style)")]
-    public float glideStartSpeed = 9f;
-    public float minGlideSpeed = 6f;
-    public float levelGlideSpeed = 45f;
-    public float levelGlideAcceleration = 25f;
-    public float diveSpeedBonus = 8f;
-    public float glideMaxSpeed = 28f;
-    public float glideDiveAcceleration = 18f;
-    public float glideClimbSlowdown = 55f;
-    public float glideDrag = 0.08f;
-    public float glideSink = 2.5f;
-    public float glideMinDescentSpeed = 2f;
-    public float glideTurnSpeed = 6f;
 
     [Header("Glide Animation")]
     public Transform playerModel;
     public float glideBodyPitch = 90f;
     public float glideBankAngle = 25f;
     public float glideAnimSmooth = 8f;
-
-    [Header("Checkpoint Boost")]
-    public float boostMultiplier = 2f;
-    public float boostDuration = 2f;
-    public float glideBoostBurst = 8f;
 
     [Header("Runtime (read-only-ish)")]
     public Vector3 lastCheckpoint;
@@ -93,7 +71,7 @@ public class PlayerMovement : MonoBehaviour
 
         if (Keyboard.current != null && Keyboard.current.spaceKey.wasPressedThisFrame && isGrounded)
         {
-            rb.AddForce(Vector3.up * jumpForce, ForceMode.Impulse);
+            rb.AddForce(Vector3.up * GameplayRules.JumpForce, ForceMode.Impulse);
         }
 
         bool holdingGlide = !isGrounded && Keyboard.current != null && Keyboard.current.spaceKey.isPressed;
@@ -104,7 +82,7 @@ public class PlayerMovement : MonoBehaviour
         {
             currentGlideSpeed = Mathf.Max(
                 new Vector3(rb.linearVelocity.x, 0f, rb.linearVelocity.z).magnitude,
-                glideStartSpeed
+                GameplayRules.GlideStartSpeed
             );
             isGliding = true;
         }
@@ -185,11 +163,11 @@ public class PlayerMovement : MonoBehaviour
         float x = moveInput.x;
         float z = moveInput.y;
 
-        float forwardSpeed = z > 0f ? z * forwardSpeedMultiplier : z;
+        float forwardSpeed = z > 0f ? z * GameplayRules.ForwardSpeedMultiplier : z;
         Vector3 movement = transform.right * x + transform.forward * forwardSpeed;
-        movement = Vector3.ClampMagnitude(movement, forwardSpeedMultiplier);
+        movement = Vector3.ClampMagnitude(movement, GameplayRules.ForwardSpeedMultiplier);
 
-        Vector3 velocity = movement * (speed * currentSpeedMultiplier);
+        Vector3 velocity = movement * (GameplayRules.WalkSpeed * currentSpeedMultiplier);
         float verticalVelocity = rb.linearVelocity.y;
 
         if (isGrounded)
@@ -203,10 +181,10 @@ public class PlayerMovement : MonoBehaviour
         Vector3 lookDir = (playerCamera != null ? playerCamera.forward : transform.forward).normalized;
         float pitch = lookDir.y; // +up, -down
 
-        float naturalMaxSpeed = levelGlideSpeed + diveSpeedBonus;
-        float maxSpeed = Mathf.Max(glideMaxSpeed, naturalMaxSpeed) * currentSpeedMultiplier;
-        float levelSpeed = levelGlideSpeed * currentSpeedMultiplier;
-        float diveBonus = diveSpeedBonus * currentSpeedMultiplier;
+        float naturalMaxSpeed = GameplayRules.LevelGlideSpeed + GameplayRules.DiveSpeedBonus;
+        float maxSpeed = Mathf.Max(GameplayRules.GlideMaxSpeed, naturalMaxSpeed) * currentSpeedMultiplier;
+        float levelSpeed = GameplayRules.LevelGlideSpeed * currentSpeedMultiplier;
+        float diveBonus = GameplayRules.DiveSpeedBonus * currentSpeedMultiplier;
 
         // Looking up bleeds speed. Looking back down gradually builds it again.
         if (pitch < -0.05f)
@@ -216,7 +194,7 @@ public class PlayerMovement : MonoBehaviour
             currentGlideSpeed = Mathf.MoveTowards(
                 currentGlideSpeed,
                 diveTargetSpeed,
-                glideDiveAcceleration * diveAmount * Time.fixedDeltaTime
+                GameplayRules.GlideDiveAcceleration * diveAmount * Time.fixedDeltaTime
             );
         }
         else if (pitch > 0.05f)
@@ -224,30 +202,30 @@ public class PlayerMovement : MonoBehaviour
             float climbAmount = Mathf.InverseLerp(0.05f, 0.75f, pitch);
             currentGlideSpeed = Mathf.MoveTowards(
                 currentGlideSpeed,
-                minGlideSpeed,
-                glideClimbSlowdown * climbAmount * Time.fixedDeltaTime
+                GameplayRules.MinGlideSpeed,
+                GameplayRules.GlideClimbSlowdown * climbAmount * Time.fixedDeltaTime
             );
         }
 
-        currentGlideSpeed -= currentGlideSpeed * glideDrag * Time.fixedDeltaTime;
+        currentGlideSpeed -= currentGlideSpeed * GameplayRules.GlideDrag * Time.fixedDeltaTime;
 
         if (Mathf.Abs(pitch) < 0.15f && currentGlideSpeed < levelSpeed)
         {
             currentGlideSpeed = Mathf.MoveTowards(
                 currentGlideSpeed,
                 levelSpeed,
-                levelGlideAcceleration * Time.fixedDeltaTime
+                GameplayRules.LevelGlideAcceleration * Time.fixedDeltaTime
             );
         }
 
-        currentGlideSpeed = Mathf.Clamp(currentGlideSpeed, minGlideSpeed, maxSpeed);
+        currentGlideSpeed = Mathf.Clamp(currentGlideSpeed, GameplayRules.MinGlideSpeed, maxSpeed);
 
         Vector3 targetVelocity = lookDir * currentGlideSpeed;
-        targetVelocity.y -= glideSink;
-        targetVelocity.y = Mathf.Min(targetVelocity.y, -glideMinDescentSpeed);
+        targetVelocity.y -= GameplayRules.GlideSink;
+        targetVelocity.y = Mathf.Min(targetVelocity.y, -GameplayRules.GlideMinDescentSpeed);
 
-        Vector3 newVelocity = Vector3.Lerp(rb.linearVelocity, targetVelocity, glideTurnSpeed * Time.fixedDeltaTime);
-        newVelocity.y = Mathf.Min(newVelocity.y, -glideMinDescentSpeed);
+        Vector3 newVelocity = Vector3.Lerp(rb.linearVelocity, targetVelocity, GameplayRules.GlideTurnSpeed * Time.fixedDeltaTime);
+        newVelocity.y = Mathf.Min(newVelocity.y, -GameplayRules.GlideMinDescentSpeed);
 
         rb.linearVelocity = newVelocity;
     }
@@ -338,11 +316,11 @@ public class PlayerMovement : MonoBehaviour
     IEnumerator SpeedBoost()
     {
         Debug.Log("SPEED BOOST");
-        currentSpeedMultiplier = boostMultiplier;
+        currentSpeedMultiplier = GameplayRules.CheckpointBoostMultiplier;
 
-        currentGlideSpeed = Mathf.Max(currentGlideSpeed, glideStartSpeed) + glideBoostBurst;
+        currentGlideSpeed = Mathf.Max(currentGlideSpeed, GameplayRules.GlideStartSpeed) + GameplayRules.CheckpointGlideBoostBurst;
 
-        yield return new WaitForSeconds(boostDuration);
+        yield return new WaitForSeconds(GameplayRules.CheckpointBoostDuration);
 
         currentSpeedMultiplier = 1f;
         speedBoostCoroutine = null;

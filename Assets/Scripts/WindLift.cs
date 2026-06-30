@@ -5,12 +5,6 @@ using UnityEngine.SceneManagement;
 [DisallowMultipleComponent]
 public class WindLift : MonoBehaviour
 {
-    [SerializeField] private float liftHeight = 40f;
-    [SerializeField] private float liftAcceleration = 160f;
-    [SerializeField] private float instantUpwardSpeed = 35f;
-    [SerializeField] private float maxUpwardSpeed = 95f;
-    [SerializeField] private float fastPlayerPredictionTime = 0.35f;
-    [SerializeField] private float extraHorizontalPadding = 4f;
     [SerializeField] private LayerMask affectedLayers = ~0;
     [SerializeField] private bool drawGizmos = true;
 
@@ -25,7 +19,10 @@ public class WindLift : MonoBehaviour
     private void FixedUpdate()
     {
         Bounds bounds = GetSourceBounds();
-        Vector3 halfExtents = new(bounds.extents.x + extraHorizontalPadding, liftHeight * 0.5f, bounds.extents.z + extraHorizontalPadding);
+        Vector3 halfExtents = new(
+            bounds.extents.x + GameplayRules.WindExtraHorizontalPadding,
+            GameplayRules.WindLiftHeight * 0.5f,
+            bounds.extents.z + GameplayRules.WindExtraHorizontalPadding);
         Vector3 center = bounds.center + Vector3.up * (bounds.extents.y + halfExtents.y);
 
         Collider[] hits = Physics.OverlapBox(center, halfExtents, Quaternion.identity, affectedLayers, QueryTriggerInteraction.Collide);
@@ -48,7 +45,7 @@ public class WindLift : MonoBehaviour
                 continue;
             }
 
-            Vector3 predictedPosition = playerBody.position + playerBody.linearVelocity * fastPlayerPredictionTime;
+            Vector3 predictedPosition = playerBody.position + playerBody.linearVelocity * GameplayRules.WindFastPlayerPredictionTime;
 
             bool predictedInside =
                 predictedPosition.x >= center.x - halfExtents.x &&
@@ -67,19 +64,19 @@ public class WindLift : MonoBehaviour
 
     private void ApplyLift(Rigidbody playerBody)
     {
-        if (playerBody.linearVelocity.y < instantUpwardSpeed)
+        if (playerBody.linearVelocity.y < GameplayRules.WindInstantUpwardSpeed)
         {
             Vector3 velocity = playerBody.linearVelocity;
-            velocity.y = instantUpwardSpeed;
+            velocity.y = GameplayRules.WindInstantUpwardSpeed;
             playerBody.linearVelocity = velocity;
         }
 
-        playerBody.AddForce(Vector3.up * liftAcceleration, ForceMode.Acceleration);
+        playerBody.AddForce(Vector3.up * GameplayRules.WindLiftAcceleration, ForceMode.Acceleration);
 
-        if (playerBody.linearVelocity.y > maxUpwardSpeed)
+        if (playerBody.linearVelocity.y > GameplayRules.WindMaxUpwardSpeed)
         {
             Vector3 velocity = playerBody.linearVelocity;
-            velocity.y = maxUpwardSpeed;
+            velocity.y = GameplayRules.WindMaxUpwardSpeed;
             playerBody.linearVelocity = velocity;
         }
     }
@@ -115,8 +112,11 @@ public class WindLift : MonoBehaviour
 
         ResolveBoundsSources();
         Bounds bounds = GetSourceBounds();
-        Vector3 size = new(bounds.size.x + extraHorizontalPadding * 2f, liftHeight, bounds.size.z + extraHorizontalPadding * 2f);
-        Vector3 center = bounds.center + Vector3.up * (bounds.extents.y + liftHeight * 0.5f);
+        Vector3 size = new(
+            bounds.size.x + GameplayRules.WindExtraHorizontalPadding * 2f,
+            GameplayRules.WindLiftHeight,
+            bounds.size.z + GameplayRules.WindExtraHorizontalPadding * 2f);
+        Vector3 center = bounds.center + Vector3.up * (bounds.extents.y + GameplayRules.WindLiftHeight * 0.5f);
 
         Gizmos.color = new Color(0.25f, 0.7f, 1f, 0.25f);
         Gizmos.DrawCube(center, size);
