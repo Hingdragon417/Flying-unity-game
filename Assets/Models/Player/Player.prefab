@@ -468,24 +468,17 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 4c2c874b0638b704e9d5a53e3d1b9c61, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::PlayerMovement
-  speed: 5
-  jumpForce: 5
-  glideFallSpeed: 2
-  glideDiveFallSpeed: 18
-  glideStartSpeed: 7
-  glideMaxSpeed: 24
-  glideAcceleration: 8
-  glideDiveAcceleration: 18
-  glideStallDeceleration: 20
-  glideStallFallSpeed: 12
-  glideStallPitch: 0.35
-  glideTurnSpeed: 12
-  glideRotationSpeed: 8
   mouseSensitivity: 0.5
   playerCamera: {fileID: 0}
+  hideLocalBodyFromCamera: 1
+  playerModel: {fileID: 0}
+  glideBodyPitch: 90
+  glideBankAngle: 25
+  glideAnimSmooth: 8
   lastCheckpoint: {x: 0, y: 0, z: 0}
   cameraRotation: 0
   currentGlideSpeed: 0
+  currentSpeedMultiplier: 1
 --- !u!114 &1849382526606628263
 MonoBehaviour:
   m_ObjectHideFlags: 0

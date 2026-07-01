@@ -3,12 +3,14 @@ using System.Collections.Generic;
 using Unity.Mathematics;
 using UnityEngine;
 using UnityEngine.InputSystem;
+using UnityEngine.Rendering;
 
 public class PlayerMovement : MonoBehaviour
 {
     [Header("Movement")]
     public float mouseSensitivity = 0.5f;
     public Transform playerCamera;
+    public bool hideLocalBodyFromCamera = true;
 
     [Header("Glide Animation")]
     public Transform playerModel;
@@ -45,6 +47,8 @@ public class PlayerMovement : MonoBehaviour
 
         Cursor.lockState = CursorLockMode.Locked;
         Cursor.visible = false;
+
+        SetupLocalBodyCameraHider();
     }
 
     void Update()
@@ -151,6 +155,114 @@ public class PlayerMovement : MonoBehaviour
         playerModel = modelTransform;
     }
 
+    private void SetupLocalBodyCameraHider()
+    {
+        if (!hideLocalBodyFromCamera || playerCamera == null)
+        {
+            return;
+        }
+
+        if (playerModel == null)
+        {
+            ResolveSetupReferences();
+        }
+
+        Camera cameraComponent = playerCamera.GetComponent<Camera>();
+        if (cameraComponent == null)
+        {
+            return;
+        }
+
+        List<Renderer> bodyRenderers = new();
+        Transform renderRoot = playerModel != null ? playerModel : transform;
+
+        foreach (Renderer bodyRenderer in renderRoot.GetComponentsInChildren<Renderer>(true))
+        {
+            if (bodyRenderer.transform.IsChildOf(playerCamera))
+            {
+                continue;
+            }
+
+            bodyRenderers.Add(bodyRenderer);
+        }
+
+        LocalCameraBodyHider bodyHider = cameraComponent.GetComponent<LocalCameraBodyHider>();
+        if (bodyHider == null)
+        {
+            bodyHider = cameraComponent.gameObject.AddComponent<LocalCameraBodyHider>();
+        }
+
+        bodyHider.SetRenderers(bodyRenderers);
+    }
+
+    private sealed class LocalCameraBodyHider : MonoBehaviour
+    {
+        private readonly List<Renderer> bodyRenderers = new();
+        private Camera targetCamera;
+
+        private void Awake()
+        {
+            targetCamera = GetComponent<Camera>();
+        }
+
+        private void OnEnable()
+        {
+            RenderPipelineManager.beginCameraRendering += HandleBeginCameraRendering;
+            RenderPipelineManager.endCameraRendering += HandleEndCameraRendering;
+        }
+
+        public void SetRenderers(List<Renderer> renderers)
+        {
+            targetCamera = GetComponent<Camera>();
+            bodyRenderers.Clear();
+            bodyRenderers.AddRange(renderers);
+            RestoreBodyRenderers();
+        }
+
+        private void HandleBeginCameraRendering(ScriptableRenderContext context, Camera renderingCamera)
+        {
+            if (renderingCamera != targetCamera)
+            {
+                return;
+            }
+
+            SetBodyRenderersVisible(false);
+        }
+
+        private void HandleEndCameraRendering(ScriptableRenderContext context, Camera renderingCamera)
+        {
+            if (renderingCamera != targetCamera)
+            {
+                return;
+            }
+
+            RestoreBodyRenderers();
+        }
+
+        private void OnDisable()
+        {
+            RenderPipelineManager.beginCameraRendering -= HandleBeginCameraRendering;
+            RenderPipelineManager.endCameraRendering -= HandleEndCameraRendering;
+            RestoreBodyRenderers();
+        }
+
+        private void RestoreBodyRenderers()
+        {
+            SetBodyRenderersVisible(true);
+        }
+
+        private void SetBodyRenderersVisible(bool visible)
+        {
+            foreach (Renderer bodyRenderer in bodyRenderers)
+            {
+                if (bodyRenderer != null)
+                {
+                    bodyRenderer.enabled = visible;
+                }
+            }
+        }
+    }
+
     void FixedUpdate()
     {
         if (isGliding)
@@ -163,9 +275,8 @@ public class PlayerMovement : MonoBehaviour
         float x = moveInput.x;
         float z = moveInput.y;
 
-        float forwardSpeed = z > 0f ? z * GameplayRules.ForwardSpeedMultiplier : z;
-        Vector3 movement = transform.right * x + transform.forward * forwardSpeed;
-        movement = Vector3.ClampMagnitude(movement, GameplayRules.ForwardSpeedMultiplier);
+        Vector3 movement = transform.right * x + transform.forward * z;
+        movement = Vector3.ClampMagnitude(movement, 1f);
 
         Vector3 velocity = movement * (GameplayRules.WalkSpeed * currentSpeedMultiplier);
         float verticalVelocity = rb.linearVelocity.y;

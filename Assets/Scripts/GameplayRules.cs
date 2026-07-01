@@ -1,7 +1,6 @@
 public static class GameplayRules
 {
     public const float WalkSpeed = 5f;
-    public const float ForwardSpeedMultiplier = 4f;
     public const float JumpForce = 5f;
 
     public const float GlideStartSpeed = 9f;
